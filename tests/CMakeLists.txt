@@ -14,13 +14,13 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(almost_tests
-    test_vector.cpp
+    almost_tests.cpp
 )
 
 target_link_libraries(almost_tests
     PRIVATE
-        almost::almost
-        GTest::gtest_main
+    almost::almost
+    GTest::gtest_main
 )
 
 include(GoogleTest)
