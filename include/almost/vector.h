@@ -1,13 +1,39 @@
 #ifndef _ALMOST_VECTOR_H
 #define _ALMOST_VECTOR_H
 
+#include <concepts>  // std::copyable, std::equality_comparable, std::signed_integral
 #include <cstddef>           // std::size_t, std::ptrdiff_t
 #include <initializer_list>  // std::initializer_list
 #include <iterator>          // std::reverse_iterator
+#include <iterator>  // std::incrementable_traits, std::indirectly_readable_traits, std::iter_reference
 #include <memory>  // std::allocator, std::allocator_traits, std::allocation_result
-#include <type_traits>  // std::type_identity_t
+#include <type_traits>  // std::type_identity_t, std::common_reference, std::same_as
 
 namespace almost {
+template <class T>
+concept Referencable = requires { typename std::type_identity_t<T&>; };
+template <class I>
+concept LegacyIterator = requires(I i) {
+  { *i } -> Referencable;
+  { ++i } -> std::same_as<I&>;
+  { *i++ } -> Referencable;
+} && std::copyable<I>;
+template <class I>
+concept LegacyInputIterator =
+    LegacyIterator<I> && std::equality_comparable<I> && requires(I i) {
+      typename std::incrementable_traits<I>::difference_type;
+      typename std::indirectly_readable_traits<I>::value_type;
+      typename std::common_reference_t<
+          std::iter_reference_t<I>&&,
+          typename std::indirectly_readable_traits<I>::value_type&>;
+      *i++;
+      typename std::common_reference_t<
+          decltype(*i++)&&,
+          typename std::indirectly_readable_traits<I>::value_type&>;
+      requires std::signed_integral<
+          typename std::incrementable_traits<I>::difference_type>;
+    };
+
 template <class Pointer, class SizeType = std::size_t>
 struct allocation_result {
   Pointer ptr;
@@ -26,26 +52,36 @@ class vector {
   using pointer = typename std::allocator_traits<Allocator>::pointer;
   using const_pointer =
       typename std::allocator_traits<Allocator>::const_pointer;
-  using iterator = pointer;              // TODO: need not be pointer
-  using const_iterator = const_pointer;  // TODO: need not be const_pointer
+  using iterator = pointer;
+  using const_iterator = const_pointer;
   using reverse_iterator = std::reverse_iterator<iterator>;
   using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
  private:
   // implementation details
   struct vector_impl : allocator_type {
-    pointer _data;
+    almost::allocation_result<pointer, size_type> _data;
     size_type _size;
-    size_type _capacity;
 
-    constexpr vector_impl() noexcept
-        : allocator_type(), _data{}, _size{}, _capacity{} {}
+    constexpr vector_impl() noexcept : allocator_type(), _data{}, _size{} {}
     constexpr explicit vector_impl(const allocator_type& alloc) noexcept
-        : allocator_type(alloc), _data{}, _size{}, _capacity{} {}
+        : allocator_type(alloc), _data{}, _size{} {}
   } _impl;
 
-  constexpr void move_to_if_noexcept(
-      almost::allocation_result<pointer, size_type> new_data) noexcept;
+  enum class DoDestroy { False, True };
+  template <DoDestroy destroy>
+  constexpr void move_to_if_noexcept(pointer dst, pointer src,
+                                     size_type count) noexcept;
+  constexpr void shift_to_end(const_iterator pos, size_type offset) noexcept;
+  constexpr allocation_result<pointer, size_type> allocate_if_needed(
+      size_type count) noexcept;
+  constexpr allocation_result<pointer, size_type> grow_to(
+      size_type count) noexcept;
+  constexpr void deallocate() noexcept;
+  constexpr size_type clear_and_deallocate() noexcept;
+  enum class InsertOrder { NewFirst, Natural };
+  template <InsertOrder order, DoDestroy destroy, LegacyInputIterator InputIt>
+  constexpr iterator insert(const_iterator pos, InputIt first, InputIt last);
 
  public:  // member functions
   // constructors
@@ -54,7 +90,7 @@ class vector {
   explicit vector(size_type count, const Allocator& alloc = Allocator());
   constexpr vector(size_type count, const T& value,
                    const Allocator& alloc = Allocator());
-  template <class InputIt>
+  template <LegacyInputIterator InputIt>
   constexpr vector(InputIt first, InputIt last,
                    const Allocator& alloc = Allocator());
   // template <container - compatible - range<T> R>
@@ -78,7 +114,7 @@ class vector {
       std::allocator_traits<Allocator>::is_always_equal::value);
   constexpr vector& operator=(std::initializer_list<T> ilist);
   constexpr void assign(size_type count, const T& value);
-  template <class InputIt>
+  template <LegacyInputIterator InputIt>
   constexpr void assign(InputIt first, InputIt last);
   constexpr void assign(std::initializer_list<T> ilist);
   // template <container - compatible - range<T> R>
@@ -121,7 +157,7 @@ class vector {
   constexpr iterator insert(const_iterator pos, T&& value);
   constexpr iterator insert(const_iterator pos, size_type count,
                             const T& value);
-  template <class InputIt>
+  template <LegacyInputIterator InputIt>
   constexpr iterator insert(const_iterator pos, InputIt first, InputIt last);
   constexpr iterator insert(const_iterator pos, std::initializer_list<T> ilist);
   // template< container-compatible-range<T> R >
@@ -161,7 +197,7 @@ template <class T, class Alloc, class Pred>
 constexpr typename vector<T, Alloc>::size_type erase_if(vector<T, Alloc>& c,
                                                         Pred pred);
 // deduction guides
-template <class InputIt,
+template <LegacyInputIterator InputIt,
           class Alloc = std::allocator<
               typename std::iterator_traits<InputIt>::value_type>>
 vector(InputIt, InputIt, Alloc = Alloc())

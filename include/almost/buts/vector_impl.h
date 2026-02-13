@@ -1,30 +1,142 @@
-#include <algorithm>  // std::equal, std::lexicographical_compare_three_way, std::remove, std::remove_if, std::swap, std::max
+#include <algorithm>  // std::equal, std::lexicographical_compare_three_way, std::remove, std::remove_if, std::swap, std::max, std::min
 #include <cassert>    // assert
 #include <exception>  // std::out_of_range
-#include <iterator>   // std::prev, std::next, std::distance
+#include <functional>  // std::reference_wrapper
+#include <iterator>    // std::prev, std::next, std::distance
+#include <iterator>  //std::make_move_iterator, std::reverse_iterator, std::make_reverse_iterator
 #include <memory>  // std::addressof, std::allocator_traits, std::allocation_result
+#include <ranges>       // std::views::repeat, std::views::single
+#include <string>       // std::to_string
 #include <type_traits>  // std::type_identity_t
 #include <utility>      // std::move, std::move_if_noexcept, std::forward
 
 namespace almost {
 // helper functions
 template <class T, class Allocator>
+template <vector<T, Allocator>::DoDestroy destroy>
 constexpr void vector<T, Allocator>::move_to_if_noexcept(
-    almost::allocation_result<typename vector<T, Allocator>::pointer,
-                              typename vector<T, Allocator>::size_type>
-        new_data) noexcept {
-  for (reference elem : *this) {
+    pointer dst, pointer src, size_type count) noexcept {
+  for (size_type i = 0; i < count; ++i) {
     std::allocator_traits<allocator_type>::construct(
-        _impl, new_data.ptr + (_impl._data - new_data.ptr),
-        std::move_if_noexcept(elem));
-    std::allocator_traits<allocator_type>::destroy(_impl, std::addressof(elem));
+        _impl, dst + i, std::move_if_noexcept(src[i]));
+    if constexpr (destroy == DoDestroy::True &&
+                  std::is_nothrow_move_constructible_v<value_type>) {
+      // IMPLEMENTATION: I don't know why but if move_if_noexcept returns an
+      // lvalue reference, the destroy happens at the end, whereas it is
+      // interleave if move is safe.
+      std::allocator_traits<allocator_type>::destroy(_impl,
+                                                     std::addressof(src[i]));
+    }
   }
-  std::allocator_traits<allocator_type>::deallocate(_impl, _impl._data,
-                                                    capacity());
-  _impl._data = new_data.ptr;
-  _impl._capacity = new_data.count;
+  if constexpr (destroy == DoDestroy::True &&
+                !std::is_nothrow_move_constructible_v<value_type>) {
+    for (size_type i = 0; i < count; ++i) {
+      std::allocator_traits<allocator_type>::destroy(_impl,
+                                                     std::addressof(src[i]));
+    }
+  }
 }
-// allocate -> do action -> move -> deallocate
+template <class T, class Allocator>
+constexpr void vector<T, Allocator>::shift_to_end(const_iterator pos,
+                                                  size_type offset) noexcept {
+  // should have enough capacity
+  if (pos == end()) {
+    _impl._size += offset;
+    return;
+  }
+  for (iterator it = end() - 1; it >= pos; --it) {
+    auto dst = it + offset;
+    if (dst >= end()) {
+      std::allocator_traits<allocator_type>::construct(
+          _impl, dst, std::move_if_noexcept(*it));
+    } else {
+      *dst = std::move_if_noexcept(*it);
+    }
+  }
+  _impl._size += offset;
+}
+template <class T, class Allocator>
+constexpr allocation_result<typename vector<T, Allocator>::pointer,
+                            typename vector<T, Allocator>::size_type>
+vector<T, Allocator>::allocate_if_needed(size_type count) noexcept {
+  if (count <= capacity()) {
+    return _impl._data;
+  }
+  pointer new_data =
+      std::allocator_traits<allocator_type>::allocate(_impl, count);
+  return {new_data, count};
+}
+template <class T, class Allocator>
+constexpr allocation_result<typename vector<T, Allocator>::pointer,
+                            typename vector<T, Allocator>::size_type>
+vector<T, Allocator>::grow_to(size_type count) noexcept {
+  if (count <= capacity()) {
+    return _impl._data;
+  }
+  size_type new_cap = std::max(count, capacity() * 2);
+  return allocate_if_needed(new_cap);
+}
+template <class T, class Allocator>
+constexpr void vector<T, Allocator>::deallocate() noexcept {
+  if (capacity() > 0) {
+    std::allocator_traits<allocator_type>::deallocate(_impl, _impl._data.ptr,
+                                                      capacity());
+    _impl._data = {};
+  }
+}
+template <class T, class Allocator>
+constexpr vector<T, Allocator>::size_type
+vector<T, Allocator>::clear_and_deallocate() noexcept {
+  size_type old_size = size();
+  clear();
+  deallocate();
+  return old_size;
+}
+// IMPLEMENTATION: insert is implemented with many different strategies
+template <class T, class Allocator>
+template <vector<T, Allocator>::InsertOrder order,
+          vector<T, Allocator>::DoDestroy destroy, LegacyInputIterator InputIt>
+constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
+    vector<T, Allocator>::const_iterator pos, InputIt first, InputIt last) {
+  auto count = std::distance(first, last);
+  auto new_data = grow_to(size() + count);
+  if (new_data.ptr != _impl._data.ptr) {
+    if constexpr (order == InsertOrder::NewFirst) {
+      for (InputIt it = first; it != last; it = std::next(it)) {
+        std::allocator_traits<allocator_type>::construct(
+            _impl, new_data.ptr + (pos - begin()) + std::distance(first, it),
+            *it);
+      }
+    }
+    move_to_if_noexcept<destroy>(new_data.ptr, _impl._data.ptr, pos - begin());
+    if constexpr (order == InsertOrder::Natural) {
+      for (InputIt it = first; it != last; it = std::next(it)) {
+        std::allocator_traits<allocator_type>::construct(
+            _impl, new_data.ptr + (pos - begin()) + std::distance(first, it),
+            *it);
+      }
+    }
+    move_to_if_noexcept<destroy>(new_data.ptr + (pos - begin()) + count,
+                                 _impl._data.ptr + (pos - begin()),
+                                 size() - (pos - begin()));
+    if constexpr (destroy == DoDestroy::True) {
+      deallocate();
+    } else {
+      _impl._size = clear_and_deallocate();
+    }
+    _impl._data = new_data;
+    _impl._size += count;
+    return new_data.ptr + (pos - begin());
+  } else {
+    shift_to_end(pos, count);
+    auto dst = const_cast<iterator>(pos);
+    for (InputIt it = first; it != last; it = std::next(it)) {
+      std::allocator_traits<allocator_type>::construct(
+          _impl, dst + std::distance(first, it), *it);
+    }
+    return dst;
+  }
+}
 
 // member functions
 // constructors
@@ -43,22 +155,17 @@ template <class T, class Allocator>
 constexpr vector<T, Allocator>::vector(size_type count, const T& value,
                                        const Allocator& alloc)
     : vector(alloc) {
-  reserve(count, value);
-  for (size_type i = 0; i < count; ++i) {
-    std::allocator_traits<allocator_type>::construct(_impl, _impl._data + i,
-                                                     value);
-  }
+  reserve(count);
+  for (size_t i = 0; i < count; ++i) emplace_back(value);
 }
 template <class T, class Allocator>
-template <class InputIt>
+template <LegacyInputIterator InputIt>
 constexpr vector<T, Allocator>::vector(InputIt first, InputIt last,
                                        const Allocator& alloc)
     : vector(alloc) {
   reserve(std::distance(first, last));
   for (InputIt it = first; it != last; it = std::next(it)) {
-    std::allocator_traits<allocator_type>::construct(
-        _impl, _impl._data + _impl._size, *it);
-    ++_impl._size;
+    emplace_back(*it);
   }
 }
 // template <container - compatible - range<T> R>
@@ -78,7 +185,7 @@ constexpr vector<T, Allocator>::vector(
     : vector(alloc) {
   reserve(other.size());
   for (const_reference elem : other) {
-    push_back(elem);
+    emplace_back(elem);
   }
 }
 template <class T, class Allocator>
@@ -90,7 +197,7 @@ constexpr vector<T, Allocator>::vector(
   } else {
     reserve(other.size());
     for (reference elem : other) {
-      push_back(std::move(elem));
+      emplace_back(std::move(elem));
     }
     other.clear();
   }
@@ -102,26 +209,90 @@ constexpr vector<T, Allocator>::vector(std::initializer_list<T> init,
 // destructors
 template <class T, class Allocator>
 constexpr vector<T, Allocator>::~vector() {
-  clear();
-  if (capacity() > 0) {
-    std::allocator_traits<allocator_type>::deallocate(_impl, _impl._data,
-                                                      capacity());
+  clear_and_deallocate();
+}
+// other member functions
+template <class T, class Allocator>
+constexpr vector<T, Allocator>& vector<T, Allocator>::operator=(
+    const vector& other) {
+  if (this == &other) {
+    return *this;
   }
+  assign(other.begin(), other.end());
+  return *this;
+}
+template <class T, class Allocator>
+constexpr vector<T, Allocator>&
+vector<T, Allocator>::operator=(vector&& other) noexcept(
+    std::allocator_traits<
+        Allocator>::propagate_on_container_move_assignment::value ||
+    std::allocator_traits<Allocator>::is_always_equal::value) {
+  swap(other);
+  other.clear_and_deallocate();  // IMPLEMENTATION: why does stl do this?
+                                 // capacity of moved from object is 0
+  return *this;
+}
+template <class T, class Allocator>
+constexpr vector<T, Allocator>& vector<T, Allocator>::operator=(
+    std::initializer_list<T> ilist) {
+  assign(ilist);
+  return *this;
+}
+template <class T, class Allocator>
+constexpr void vector<T, Allocator>::assign(size_type count, const T& value) {
+  auto view = std::views::repeat(std::reference_wrapper<const T>(value), count);
+  assign(view.begin(), view.end());
+  return;
+}
+template <class T, class Allocator>
+template <LegacyInputIterator InputIt>
+constexpr void vector<T, Allocator>::assign(InputIt first, InputIt last) {
+  if (capacity() < std::distance(first, last)) {
+    vector tmp(first, last, get_allocator());
+    swap(tmp);
+  } else {
+    auto it = first;
+    for (size_t i = 0; i < size() && it != last; ++i, ++it) {
+      (*this)[i] = *it;
+    }
+    while (it != last) {
+      emplace_back(*it);
+      ++it;
+    }
+    resize(std::distance(first, last));
+  }
+  return;
+}
+template <class T, class Allocator>
+constexpr void vector<T, Allocator>::assign(std::initializer_list<T> ilist) {
+  assign(ilist.begin(), ilist.end());
+  return;
+}
+// template <container - compatible - range<T> R>
+// constexpr void assign_range(R&& rg);  // TODO: C++23
+template <class T, class Allocator>
+constexpr vector<T, Allocator>::allocator_type
+vector<T, Allocator>::get_allocator() const noexcept {
+  return _impl;
 }
 // element access
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::reference vector<T, Allocator>::at(
     typename vector<T, Allocator>::size_type pos) {
-  if (pos >= size()) {
-    throw std::out_of_range("vector::at: position out of range");
+  if (pos >= size()) {  // GCC message
+    throw std::out_of_range(
+        "vector::_M_range_check: __n (which is " + std::to_string(pos) +
+        ") >= this->size() (which is " + std::to_string(size()) + ")");
   }
   return (*this)[pos];
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_reference
 vector<T, Allocator>::at(typename vector<T, Allocator>::size_type pos) const {
-  if (pos >= size()) {
-    throw std::out_of_range("vector::at: position out of range");
+  if (pos >= size()) {  // GCC message
+    throw std::out_of_range(
+        "vector::_M_range_check: __n (which is " + std::to_string(pos) +
+        ") >= this->size() (which is " + std::to_string(size()) + ")");
   }
   return (*this)[pos];
 }
@@ -174,12 +345,12 @@ constexpr const T* vector<T, Allocator>::data() const noexcept {
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator
 vector<T, Allocator>::begin() noexcept {
-  return _impl._data;
+  return _impl._data.ptr;
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_iterator
 vector<T, Allocator>::begin() const noexcept {
-  return _impl._data;
+  return _impl._data.ptr;
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_iterator
@@ -204,32 +375,32 @@ vector<T, Allocator>::cend() const noexcept {
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::reverse_iterator
 vector<T, Allocator>::rbegin() noexcept {
-  return end();
+  return std::make_reverse_iterator(end());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_reverse_iterator
 vector<T, Allocator>::rbegin() const noexcept {
-  return end();
+  return std::make_reverse_iterator(end());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_reverse_iterator
 vector<T, Allocator>::crbegin() const noexcept {
-  return cend();
+  return std::make_reverse_iterator(cend());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::reverse_iterator
 vector<T, Allocator>::rend() noexcept {
-  return begin();
+  return std::make_reverse_iterator(begin());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_reverse_iterator
 vector<T, Allocator>::rend() const noexcept {
-  return begin();
+  return std::make_reverse_iterator(begin());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::const_reverse_iterator
 vector<T, Allocator>::crend() const noexcept {
-  return cbegin();
+  return std::make_reverse_iterator(cbegin());
 }
 // capacity
 template <class T, class Allocator>
@@ -249,34 +420,29 @@ vector<T, Allocator>::max_size() const noexcept {
 template <class T, class Allocator>
 constexpr void vector<T, Allocator>::reserve(
     typename vector<T, Allocator>::size_type new_cap) {
-  if (new_cap <= capacity()) return;
-  new_cap = std::max(new_cap, capacity() * 2);
-  // auto new_data =
-  //     std::allocator_traits<allocator_type>::allocate_at_least(_impl,
-  //     new_cap);
-  pointer _new_data =
-      std::allocator_traits<allocator_type>::allocate(_impl, new_cap);
-  almost::allocation_result<pointer, size_type> new_data{_new_data, new_cap};
-  move_to_if_noexcept(new_data);
+  auto new_data = allocate_if_needed(new_cap);
+  if (new_data.ptr == _impl._data.ptr) return;
+  move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr, size());
+  deallocate();
+  _impl._data = new_data;
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::size_type
 vector<T, Allocator>::capacity() const noexcept {
-  return _impl._capacity;
+  return _impl._data.count;
 }
 template <class T, class Allocator>
 constexpr void vector<T, Allocator>::shrink_to_fit() {
   if (capacity() == size()) return;
   if (size() == 0) {
-    std::allocator_traits<allocator_type>::deallocate(_impl, _impl._data,
-                                                      capacity());
-    _impl._data = pointer{};
-    _impl._capacity = 0;
+    clear_and_deallocate();
     return;
   }
   pointer new_data =
       std::allocator_traits<allocator_type>::allocate(_impl, size());
-  move_to_if_noexcept({new_data, size()});
+  move_to_if_noexcept<DoDestroy::False>(new_data, _impl._data.ptr, size());
+  _impl._size = clear_and_deallocate();
+  _impl._data = {new_data, size()};
 }
 // modifiers
 template <class T, class Allocator>
@@ -285,32 +451,36 @@ constexpr void vector<T, Allocator>::clear() noexcept {
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
-    vector<T, Allocator>::const_iterator pos, const T& value) {
-  return insert(pos, 1, value);
+    const_iterator pos, const T& value) {
+  auto view = std::views::single(std::reference_wrapper<const T>(value));
+  return insert<InsertOrder::NewFirst, DoDestroy::True>(pos, view.begin(),
+                                                        view.end());
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
-    vector<T, Allocator>::const_iterator pos, T&& value) {
-  // TODO
+    const_iterator pos, T&& value) {
+  return insert<InsertOrder::NewFirst, DoDestroy::True>(
+      pos, std::make_move_iterator(std::addressof(value)),
+      std::make_move_iterator(std::addressof(value) + 1));
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
-    vector<T, Allocator>::const_iterator pos,
-    typename vector<T, Allocator>::size_type count, const T& value) {
-  // TODO
-  return {};
+    const_iterator pos, typename vector<T, Allocator>::size_type count,
+    const T& value) {
+  auto view = std::views::repeat(std::reference_wrapper<const T>(value), count);
+  return insert<InsertOrder::NewFirst, DoDestroy::False>(pos, view.begin(),
+                                                         view.end());
 }
 template <class T, class Allocator>
-template <class InputIt>
+template <LegacyInputIterator InputIt>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     vector<T, Allocator>::const_iterator pos, InputIt first, InputIt last) {
-  // TODO
-  return {};
+  return insert<InsertOrder::Natural, DoDestroy::False>(pos, first, last);
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     vector<T, Allocator>::const_iterator pos, std::initializer_list<T> ilist) {
-  return insert(pos, ilist.begin(), ilist.end());
+  return insert(pos, ilist.begin(), ilist.end());  // Equivalent
 }
 // template< container-compatible-range<T> R >
 // constexpr iterator insert_range( const_iterator pos, R&& rg ); // TODO:
@@ -319,8 +489,26 @@ template <class T, class Allocator>
 template <class... Args>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::emplace(
     vector<T, Allocator>::const_iterator pos, Args&&... args) {
-  // TODO
-  return {};
+  auto new_data = grow_to(size() + 1);
+  if (new_data.ptr != _impl._data.ptr) {
+    std::allocator_traits<allocator_type>::construct(
+        _impl, new_data.ptr + (pos - begin()), std::forward<Args>(args)...);
+    move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr,
+                                         pos - begin());
+    move_to_if_noexcept<DoDestroy::True>(new_data.ptr + (pos - begin()) + 1,
+                                         _impl._data.ptr + (pos - begin()),
+                                         size() - (pos - begin()));
+    deallocate();
+    _impl._data = new_data;
+    _impl._size += 1;
+    return new_data.ptr + (pos - begin());
+  } else {
+    shift_to_end(pos, 1);
+    auto dst = const_cast<iterator>(pos);
+    std::allocator_traits<allocator_type>::construct(
+        _impl, dst, std::forward<Args>(args)...);
+    return dst;
+  }
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::erase(
@@ -337,6 +525,7 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::erase(
     *l = std::move(*r);
   }
   size_type count = std::distance(first, last);
+  count = std::min<size_type>(count, size());
   resize(size() - count);
   return const_cast<iterator>(first);
 }
@@ -352,8 +541,8 @@ template <class T, class Allocator>
 template <class... Args>
 constexpr typename vector<T, Allocator>::reference
 vector<T, Allocator>::emplace_back(Args&&... args) {
-  // TODO
-  return {};
+  emplace(end(), std::forward<Args>(args)...);
+  return *end();
 }
 // template< container-compatible-range<T> R >
 // constexpr void append_range( R&& rg ); // TODO: C++23
@@ -363,33 +552,52 @@ constexpr void vector<T, Allocator>::pop_back() {
   resize(size() - 1);
 }
 template <class T, class Allocator>
-constexpr void vector<T, Allocator>::resize(
-    typename vector<T, Allocator>::size_type count) {
+constexpr void vector<T, Allocator>::resize(size_type count) {
   if (count < size()) {
     for (size_type i = count; i < size(); ++i) {
-      std::allocator_traits<allocator_type>::destroy(_impl, _impl._data + i);
+      std::allocator_traits<allocator_type>::destroy(_impl,
+                                                     _impl._data.ptr + i);
     }
   } else if (count > size()) {
-    reserve(count);
+    auto new_data = allocate_if_needed(count);
     for (size_type i = size(); i < count; ++i) {
-      std::allocator_traits<allocator_type>::construct(_impl, _impl._data + i);
+      std::allocator_traits<allocator_type>::construct(_impl, new_data.ptr + i);
+    }
+    if (new_data.ptr != _impl._data.ptr) {
+      move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr,
+                                           size());
+      deallocate();
+      _impl._data = new_data;
     }
   }
   _impl._size = count;
 }
 template <class T, class Allocator>
-constexpr void vector<T, Allocator>::resize(
-    typename vector<T, Allocator>::size_type count,
-    const typename vector<T, Allocator>::value_type& value) {
+constexpr void vector<T, Allocator>::resize(size_type count,
+                                            const value_type& value) {
   if (count < size()) {
     for (size_type i = count; i < size(); ++i) {
-      std::allocator_traits<allocator_type>::destroy(_impl, _impl._data + i);
+      std::allocator_traits<allocator_type>::destroy(_impl,
+                                                     _impl._data.ptr + i);
     }
   } else if (count > size()) {
-    reserve(count);
-    for (size_type i = size(); i < count; ++i) {
-      std::allocator_traits<allocator_type>::construct(_impl, _impl._data + i,
-                                                       value);
+    auto new_data = allocate_if_needed(count);
+    if (new_data.ptr != _impl._data.ptr) {
+      for (size_type i = size(); i < count; ++i) {
+        std::allocator_traits<allocator_type>::construct(
+            _impl, new_data.ptr + i, value);
+      }
+      // if (new_data.ptr != _impl._data.ptr) {
+      move_to_if_noexcept<DoDestroy::False>(new_data.ptr, _impl._data.ptr,
+                                            size());
+      clear_and_deallocate();
+      _impl._data = new_data;
+    } else {  // IMPLEMENTATION: for some reason, a copy is created here
+      auto cpy = value;
+      for (size_type i = size(); i < count; ++i) {
+        std::allocator_traits<allocator_type>::construct(_impl,
+                                                         new_data.ptr + i, cpy);
+      }
     }
   }
   _impl._size = count;
