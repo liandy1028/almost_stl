@@ -1,6 +1,6 @@
 #include <algorithm>  // std::equal, std::lexicographical_compare_three_way, std::remove, std::remove_if, std::swap, std::max, std::min
 #include <cassert>    // assert
-#include <exception>  // std::out_of_range
+#include <exception>  // std::out_of_range, std::length_error
 #include <functional>  // std::reference_wrapper
 #include <iterator>  // std::prev, std::next, std::distance, std::make_move_iterator, std::reverse_iterator, std::make_reverse_iterator, std::forward_iterator
 #include <ranges>    // std::views::repeat, std::views::single
@@ -42,14 +42,16 @@ constexpr void vector<T, Allocator>::shift_to_end(const_iterator pos,
     _impl._size += offset;
     return;
   }
-  for (iterator it = end() - 1; it >= pos; --it) {
+  // IMPLEMENTATION: constructs elements in forward order, moves elements in
+  // reverse order
+  for (iterator it = end() - offset; it < end(); ++it) {
     auto dst = it + offset;
-    if (dst >= end()) {
-      std::allocator_traits<allocator_type>::construct(
-          _impl, dst, std::move_if_noexcept(*it));
-    } else {
-      *dst = std::move_if_noexcept(*it);
-    }
+    std::allocator_traits<allocator_type>::construct(_impl, dst,
+                                                     std::move(*it));
+  }
+  for (iterator it = end() - offset - 1; it >= pos; --it) {
+    auto dst = it + offset;
+    *dst = std::move(*it);  // IMPLEMENTATION: move, not move_if_noexcept
   }
   _impl._size += offset;
 }
@@ -71,7 +73,8 @@ vector<T, Allocator>::grow_to(size_type count) noexcept {
   if (count <= capacity()) {
     return _impl._data;
   }
-  size_type new_cap = std::max(count, capacity() * 2);
+  // IMPLEMENTATION: grows to twice the size not capacity
+  size_type new_cap = std::max(count, size() * 2);
   return allocate_if_needed(new_cap);
 }
 template <class T, class Allocator>
@@ -125,18 +128,24 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
       _impl._size += count;
       return new_data.ptr + index;
     } else {
+      auto prv_end = end();
       shift_to_end(pos, count);
       auto dst = const_cast<iterator>(pos);
       for (InputIt it = first; it != last; it = std::next(it)) {
-        std::allocator_traits<allocator_type>::construct(
-            _impl, dst + std::distance(first, it), *it);
+        auto loc = dst + std::distance(first, it);
+        if (loc < prv_end) {
+          *loc = *it;
+        } else {
+          std::allocator_traits<allocator_type>::construct(_impl, loc, *it);
+        }
       }
       return dst;
     }
   } else {  // single pass only
-    for (InputIt it = first; it != last; it = std::next(it)) {
-      pos = insert(pos, *it) + 1;
-    }
+    // IMPLEMENTATION: interesting that this is how they handle this case
+    vector tmp(first, last, get_allocator());
+    return insert<order, destroy>(pos, std::make_move_iterator(tmp.begin()),
+                                  std::make_move_iterator(tmp.end()));
   }
 }
 
@@ -257,7 +266,7 @@ constexpr void vector<T, Allocator>::assign(InputIt first, InputIt last) {
       swap(tmp);
       return;
     }
-  } // single pass or assign in place (enough capacity)
+  }  // single pass or assign in place (enough capacity)
   size_type new_size = 0;
   for (auto it = first; it != last; ++new_size, ++it) {
     if (new_size < size()) {
@@ -426,6 +435,9 @@ vector<T, Allocator>::max_size() const noexcept {
 template <class T, class Allocator>
 constexpr void vector<T, Allocator>::reserve(
     typename vector<T, Allocator>::size_type new_cap) {
+  if (new_cap > max_size()) {
+    throw std::length_error("vector::reserve");
+  }
   auto new_data = allocate_if_needed(new_cap);
   if (new_data.ptr == _impl._data.ptr) return;
   move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr, size());
@@ -473,6 +485,13 @@ template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     const_iterator pos, typename vector<T, Allocator>::size_type count,
     const T& value) {
+  if (capacity() - size() >= count) {
+    // IMPLEMENTATION: if there is enough room, a copy is created ???
+    auto cpy = value;
+    auto view = std::views::repeat(std::reference_wrapper<const T>(cpy), count);
+    return insert<InsertOrder::NewFirst, DoDestroy::True>(pos, view.begin(),
+                                                          view.end());
+  }
   auto view = std::views::repeat(std::reference_wrapper<const T>(value), count);
   return insert<InsertOrder::NewFirst, DoDestroy::False>(pos, view.begin(),
                                                          view.end());
@@ -508,10 +527,17 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::emplace(
     _impl._size += 1;
     return new_data.ptr + index;
   } else {
-    shift_to_end(pos, 1);
     auto dst = const_cast<iterator>(pos);
-    std::allocator_traits<allocator_type>::construct(
-        _impl, dst, std::forward<Args>(args)...);
+    if (dst == end()) {
+      shift_to_end(pos, 1);  // increases size by 1 since pos == end()
+      std::allocator_traits<allocator_type>::construct(
+          _impl, dst, std::forward<Args>(args)...);
+    } else {
+      T tmp(std::forward<Args>(
+          args)...);  // IMPLEMENTATION: tmp is created before shift
+      shift_to_end(pos, 1);
+      *dst = std::move(tmp);  // IMPLEMENTATION: move, not move_if_noexcept
+    }
     return dst;
   }
 }
@@ -547,7 +573,7 @@ template <class... Args>
 constexpr typename vector<T, Allocator>::reference
 vector<T, Allocator>::emplace_back(Args&&... args) {
   emplace(end(), std::forward<Args>(args)...);
-  return *end();
+  return *(end() - 1);
 }
 // template< container-compatible-range<T> R >
 // constexpr void append_range( R&& rg ); // TODO: C++23
@@ -592,7 +618,6 @@ constexpr void vector<T, Allocator>::resize(size_type count,
         std::allocator_traits<allocator_type>::construct(
             _impl, new_data.ptr + i, value);
       }
-      // if (new_data.ptr != _impl._data.ptr) {
       move_to_if_noexcept<DoDestroy::False>(new_data.ptr, _impl._data.ptr,
                                             size());
       clear_and_deallocate();
