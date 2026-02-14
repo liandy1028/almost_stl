@@ -2,11 +2,9 @@
 #include <cassert>    // assert
 #include <exception>  // std::out_of_range
 #include <functional>  // std::reference_wrapper
-#include <iterator>    // std::prev, std::next, std::distance
-#include <iterator>  //std::make_move_iterator, std::reverse_iterator, std::make_reverse_iterator
-#include <memory>  // std::addressof, std::allocator_traits, std::allocation_result
-#include <ranges>       // std::views::repeat, std::views::single
-#include <string>       // std::to_string
+#include <iterator>  // std::prev, std::next, std::distance, std::make_move_iterator, std::reverse_iterator, std::make_reverse_iterator, std::forward_iterator
+#include <ranges>    // std::views::repeat, std::views::single
+#include <string>    // std::to_string
 #include <type_traits>  // std::type_identity_t
 #include <utility>      // std::move, std::move_if_noexcept, std::forward
 
@@ -98,43 +96,47 @@ template <vector<T, Allocator>::InsertOrder order,
           vector<T, Allocator>::DoDestroy destroy, LegacyInputIterator InputIt>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     vector<T, Allocator>::const_iterator pos, InputIt first, InputIt last) {
-  auto count = std::distance(first, last);
-  auto new_data = grow_to(size() + count);
-  if (new_data.ptr != _impl._data.ptr) {
-    if constexpr (order == InsertOrder::NewFirst) {
-      for (InputIt it = first; it != last; it = std::next(it)) {
-        std::allocator_traits<allocator_type>::construct(
-            _impl, new_data.ptr + (pos - begin()) + std::distance(first, it),
-            *it);
+  if constexpr (std::forward_iterator<InputIt>) {  // can do multiple pass
+    auto count = std::distance(first, last);
+    auto new_data = grow_to(size() + count);
+    if (new_data.ptr != _impl._data.ptr) {
+      const size_type index = pos - begin();
+      if constexpr (order == InsertOrder::NewFirst) {
+        for (InputIt it = first; it != last; it = std::next(it)) {
+          std::allocator_traits<allocator_type>::construct(
+              _impl, new_data.ptr + index + std::distance(first, it), *it);
+        }
       }
-    }
-    move_to_if_noexcept<destroy>(new_data.ptr, _impl._data.ptr, pos - begin());
-    if constexpr (order == InsertOrder::Natural) {
-      for (InputIt it = first; it != last; it = std::next(it)) {
-        std::allocator_traits<allocator_type>::construct(
-            _impl, new_data.ptr + (pos - begin()) + std::distance(first, it),
-            *it);
+      move_to_if_noexcept<destroy>(new_data.ptr, _impl._data.ptr, index);
+      if constexpr (order == InsertOrder::Natural) {
+        for (InputIt it = first; it != last; it = std::next(it)) {
+          std::allocator_traits<allocator_type>::construct(
+              _impl, new_data.ptr + index + std::distance(first, it), *it);
+        }
       }
-    }
-    move_to_if_noexcept<destroy>(new_data.ptr + (pos - begin()) + count,
-                                 _impl._data.ptr + (pos - begin()),
-                                 size() - (pos - begin()));
-    if constexpr (destroy == DoDestroy::True) {
-      deallocate();
+      move_to_if_noexcept<destroy>(new_data.ptr + index + count,
+                                   _impl._data.ptr + index, size() - index);
+      if constexpr (destroy == DoDestroy::True) {
+        deallocate();
+      } else {
+        _impl._size = clear_and_deallocate();
+      }
+      _impl._data = new_data;
+      _impl._size += count;
+      return new_data.ptr + index;
     } else {
-      _impl._size = clear_and_deallocate();
+      shift_to_end(pos, count);
+      auto dst = const_cast<iterator>(pos);
+      for (InputIt it = first; it != last; it = std::next(it)) {
+        std::allocator_traits<allocator_type>::construct(
+            _impl, dst + std::distance(first, it), *it);
+      }
+      return dst;
     }
-    _impl._data = new_data;
-    _impl._size += count;
-    return new_data.ptr + (pos - begin());
-  } else {
-    shift_to_end(pos, count);
-    auto dst = const_cast<iterator>(pos);
+  } else {  // single pass only
     for (InputIt it = first; it != last; it = std::next(it)) {
-      std::allocator_traits<allocator_type>::construct(
-          _impl, dst + std::distance(first, it), *it);
+      pos = insert(pos, *it) + 1;
     }
-    return dst;
   }
 }
 
@@ -163,7 +165,9 @@ template <LegacyInputIterator InputIt>
 constexpr vector<T, Allocator>::vector(InputIt first, InputIt last,
                                        const Allocator& alloc)
     : vector(alloc) {
-  reserve(std::distance(first, last));
+  if constexpr (std::forward_iterator<InputIt>) {  // can do multiple pass
+    reserve(std::distance(first, last));
+  }
   for (InputIt it = first; it != last; it = std::next(it)) {
     emplace_back(*it);
   }
@@ -247,21 +251,22 @@ constexpr void vector<T, Allocator>::assign(size_type count, const T& value) {
 template <class T, class Allocator>
 template <LegacyInputIterator InputIt>
 constexpr void vector<T, Allocator>::assign(InputIt first, InputIt last) {
-  if (capacity() < std::distance(first, last)) {
-    vector tmp(first, last, get_allocator());
-    swap(tmp);
-  } else {
-    auto it = first;
-    for (size_t i = 0; i < size() && it != last; ++i, ++it) {
-      (*this)[i] = *it;
+  if constexpr (std::forward_iterator<InputIt>) {  // can do multiple pass
+    if (capacity() < std::distance(first, last)) {
+      vector tmp(first, last, get_allocator());
+      swap(tmp);
+      return;
     }
-    while (it != last) {
+  } // single pass or assign in place (enough capacity)
+  size_type new_size = 0;
+  for (auto it = first; it != last; ++new_size, ++it) {
+    if (new_size < size()) {
+      (*this)[new_size] = *it;
+    } else {
       emplace_back(*it);
-      ++it;
     }
-    resize(std::distance(first, last));
   }
-  return;
+  resize(new_size);
 }
 template <class T, class Allocator>
 constexpr void vector<T, Allocator>::assign(std::initializer_list<T> ilist) {
@@ -415,7 +420,8 @@ constexpr typename vector<T, Allocator>::size_type vector<T, Allocator>::size()
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::size_type
 vector<T, Allocator>::max_size() const noexcept {
-  return std::allocator_traits<allocator_type>::max_size(allocator_type());
+  // IMPLEMENTATION: seems that GCC vector returns this value.
+  return std::allocator_traits<allocator_type>::max_size(_impl) / 2;
 }
 template <class T, class Allocator>
 constexpr void vector<T, Allocator>::reserve(
@@ -491,17 +497,16 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::emplace(
     vector<T, Allocator>::const_iterator pos, Args&&... args) {
   auto new_data = grow_to(size() + 1);
   if (new_data.ptr != _impl._data.ptr) {
+    const size_type index = pos - begin();
     std::allocator_traits<allocator_type>::construct(
-        _impl, new_data.ptr + (pos - begin()), std::forward<Args>(args)...);
-    move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr,
-                                         pos - begin());
-    move_to_if_noexcept<DoDestroy::True>(new_data.ptr + (pos - begin()) + 1,
-                                         _impl._data.ptr + (pos - begin()),
-                                         size() - (pos - begin()));
+        _impl, new_data.ptr + index, std::forward<Args>(args)...);
+    move_to_if_noexcept<DoDestroy::True>(new_data.ptr, _impl._data.ptr, index);
+    move_to_if_noexcept<DoDestroy::True>(
+        new_data.ptr + index + 1, _impl._data.ptr + index, size() - index);
     deallocate();
     _impl._data = new_data;
     _impl._size += 1;
-    return new_data.ptr + (pos - begin());
+    return new_data.ptr + index;
   } else {
     shift_to_end(pos, 1);
     auto dst = const_cast<iterator>(pos);

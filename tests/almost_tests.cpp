@@ -679,3 +679,118 @@ DUCK_TEST(Lifecycle, MoveAssignmentComplex) {
   v2 = std::move(v1);
   LOG("v2 size: ", v2.size(), " v1 size (should be 0): ", v1.size(), "\n");
 }
+
+// =============================================================================
+// AI TESTS: PART 4 - MAX COVERAGE (NON-MEMBER & CORNER CASES)
+// =============================================================================
+
+// 1. C++20 NON-MEMBER ERASURE
+DUCK_TEST(NonMember, EraseValue) {
+  Vector<T<>> v{1, 2, 3, 2, 4, 2, 5};
+  auto removed_count = erase(v, T<>(2));
+  LOG("Removed: ", removed_count, " Vector: ", v, "\n");
+}
+
+DUCK_TEST(NonMember, EraseIf) {
+  Vector<T<>> v{1, 2, 3, 4, 5, 6};
+  // Erase only even values
+  auto removed_count = erase_if(v, [](const T<>& x) { 
+    return x.val % 2 == 0; 
+  });
+  LOG("Removed count: ", removed_count, " Remaining: ", v, "\n");
+}
+
+// 2. SPACESHIP OPERATOR & LEXICOGRAPHICAL COMPARISON
+DUCK_TEST(Operators, ComparisonsDeep) {
+  Vector<T<>> v1{1, 2, 3};
+  Vector<T<>> v2{1, 2, 3};
+  Vector<T<>> v3{1, 2};
+  Vector<T<>> v4{1, 2, 4};
+
+  if ((v1 <=> v2) == std::strong_ordering::equal) LOG("v1 == v2\n");
+  if ((v3 <=> v1) == std::strong_ordering::less) LOG("v3 < v1 (prefix)\n");
+  if ((v4 <=> v1) == std::strong_ordering::greater) LOG("v4 > v1 (element diff)\n");
+}
+
+// 3. MID-VECTOR MODIFICATIONS
+DUCK_TEST(Modifiers, EmplaceMid) {
+  Vector<T<>> v{1, 3};
+  auto it = v.emplace(v.begin() + 1, 2); 
+  LOG("After emplace: ", v, " Returned iterator points to: ", *it, "\n");
+}
+
+DUCK_TEST(Modifiers, InsertRValueOverload) {
+  Vector<T<>> v{1, 2};
+  T<> val(0);
+  v.insert(v.begin(), std::move(val)); // Specifically tests T&& overload
+  LOG("After rvalue insert: ", v, "\n");
+}
+
+// 4. ITERATOR DISPATCH (INPUT vs FORWARD)
+#include <sstream>
+#include <iterator>
+DUCK_TEST(Constructor, InputIteratorPath) {
+  std::istringstream iss("10 20 30");
+  std::istream_iterator<int> start(iss), end;
+  
+  // This triggers the path that cannot use std::distance (size is unknown)
+  Vector<T<>> v(start, end);
+  LOG("From Input Iterator (stream): ", v, "\n");
+
+  // Compared to std::distance
+  Vector<T<>> v2{1, 2, 3};
+}
+
+// 5. CONST & REVERSE ITERATOR FULL COVERAGE
+DUCK_TEST(Iterators, AllFlavors) {
+  Vector<T<>> v{1, 2, 3};
+  LOG("cbegin: ", *v.cbegin(), "\n");
+  LOG("crbegin: ", *v.crbegin(), "\n");
+  LOG("crend - 1: ", *(v.crend() - 1), "\n");
+  
+  if (v.begin() == v.cbegin()) LOG("begin and cbegin match\n");
+}
+
+// 6. CAPACITY LIMITS & EDGE CASES
+DUCK_TEST(Capacity, MaxSize) {
+  Vector<T<>> v;
+  if (v.max_size() > 0) LOG("Max size reported: ", v.max_size(), "\n");
+  Vector<int> v_int;
+  if (v_int.max_size() > 0) LOG("Max size for int vector: ", v_int.max_size(), "\n");
+  Vector<char> v_char;
+  if (v_char.max_size() > 0) LOG("Max size for char vector: ", v_char.max_size(), "\n");
+  Vector<double> v_double;
+  if (v_double.max_size() > 0) LOG("Max size for double vector: ", v_double.max_size(), "\n");
+}
+
+DUCK_TEST(Memory, ReserveNoOp) {
+  Vector<T<>> v{1, 2, 3};
+  size_t old_cap = v.capacity();
+  v.reserve(old_cap);    // Should do nothing
+  v.reserve(old_cap / 2); // Should do nothing
+  LOG("Cap stable: ", v.capacity() == old_cap, "\n");
+}
+
+// 7. DATA POINTER ON EMPTY
+DUCK_TEST(Access, EmptyDataPointer) {
+  Vector<T<>> v;
+  if (v.data() == nullptr || v.size() == 0) {
+    LOG("Empty vector data() handled safely\n");
+  }
+}
+
+// 8. RANGE ASSIGNMENT (FORWARD ITERATOR)
+DUCK_TEST(Assignment, RangeAssignForward) {
+  Vector<T<>> v;
+  std::vector<int> src{100, 200, 300};
+  v.assign(src.begin(), src.end());
+  LOG("After range assign: ", v, "\n");
+}
+
+// 9. SWAP (NON-MEMBER)
+DUCK_TEST(NonMember, Swap) {
+  Vector<T<>> v1{1};
+  Vector<T<>> v2{2};
+  swap(v1, v2);
+  LOG("v1: ", v1, " v2: ", v2, "\n");
+}
