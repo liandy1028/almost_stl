@@ -121,7 +121,7 @@ DUCK_TEST(Growth, Insert2) {
 }
 
 DUCK_TEST(Growth, Insert2at1of2) {
-  Vector<T<>> v{0,0};
+  Vector<T<>> v{0, 0};
   for (int i = 0; i < 10; ++i) {
     v.insert(v.begin() + 1, 2, i);
     LOG(v, "\n");
@@ -137,7 +137,8 @@ DUCK_TEST(Growth, Insert2at1of1) {
 }
 
 DUCK_TEST(CopyVsMove, MoveIsThrowyButNoCopy) {
-  using ThrowyT = T<{.enableCopyConstructor = false, .moveConstructorCanThrow = true}>;
+  using ThrowyT =
+      T<{.enableCopyConstructor = false, .moveConstructorCanThrow = true}>;
   Vector<ThrowyT> v;
   v.push_back(ThrowyT(1));
   v.push_back(ThrowyT(2));
@@ -160,7 +161,8 @@ DUCK_TEST(Emplace, EmplaceIntoExisitingNoReallocate) {
 }
 
 DUCK_TEST(Emplace, EmplaceIntoExisitingNoReallocateCannotMove) {
-  using NoMoveT = T<{.enableMoveConstructor = false, .enableMoveAssignment = false}>;
+  using NoMoveT =
+      T<{.enableMoveConstructor = false, .enableMoveAssignment = false}>;
   Vector<NoMoveT> v{1, 2, 3};
   v.reserve(10);
   auto it = v.emplace(v.begin(), 0);
@@ -784,9 +786,7 @@ DUCK_TEST(NonMember, EraseValue) {
 DUCK_TEST(NonMember, EraseIf) {
   Vector<T<>> v{1, 2, 3, 4, 5, 6};
   // Erase only even values
-  auto removed_count = erase_if(v, [](const T<>& x) { 
-    return x.val % 2 == 0; 
-  });
+  auto removed_count = erase_if(v, [](const T<>& x) { return x.val % 2 == 0; });
   LOG("Removed count: ", removed_count, " Remaining: ", v, "\n");
 }
 
@@ -799,30 +799,31 @@ DUCK_TEST(Operators, ComparisonsDeep) {
 
   if ((v1 <=> v2) == std::strong_ordering::equal) LOG("v1 == v2\n");
   if ((v3 <=> v1) == std::strong_ordering::less) LOG("v3 < v1 (prefix)\n");
-  if ((v4 <=> v1) == std::strong_ordering::greater) LOG("v4 > v1 (element diff)\n");
+  if ((v4 <=> v1) == std::strong_ordering::greater)
+    LOG("v4 > v1 (element diff)\n");
 }
 
 // 3. MID-VECTOR MODIFICATIONS
 DUCK_TEST(Modifiers, EmplaceMid) {
   Vector<T<>> v{1, 3};
-  auto it = v.emplace(v.begin() + 1, 2); 
+  auto it = v.emplace(v.begin() + 1, 2);
   LOG("After emplace: ", v, " Returned iterator points to: ", *it, "\n");
 }
 
 DUCK_TEST(Modifiers, InsertRValueOverload) {
   Vector<T<>> v{1, 2};
   T<> val(0);
-  v.insert(v.begin(), std::move(val)); // Specifically tests T&& overload
+  v.insert(v.begin(), std::move(val));  // Specifically tests T&& overload
   LOG("After rvalue insert: ", v, "\n");
 }
 
 // 4. ITERATOR DISPATCH (INPUT vs FORWARD)
-#include <sstream>
 #include <iterator>
+#include <sstream>
 DUCK_TEST(Constructor, InputIteratorPath) {
   std::istringstream iss("10 20 30");
   std::istream_iterator<int> start(iss), end;
-  
+
   // This triggers the path that cannot use std::distance (size is unknown)
   Vector<T<>> v(start, end);
   LOG("From Input Iterator (stream): ", v, "\n");
@@ -837,7 +838,7 @@ DUCK_TEST(Iterators, AllFlavors) {
   LOG("cbegin: ", *v.cbegin(), "\n");
   LOG("crbegin: ", *v.crbegin(), "\n");
   LOG("crend - 1: ", *(v.crend() - 1), "\n");
-  
+
   if (v.begin() == v.cbegin()) LOG("begin and cbegin match\n");
 }
 
@@ -846,18 +847,21 @@ DUCK_TEST(Capacity, MaxSize) {
   Vector<T<>> v;
   if (v.max_size() > 0) LOG("Max size reported: ", v.max_size(), "\n");
   Vector<int> v_int;
-  if (v_int.max_size() > 0) LOG("Max size for int vector: ", v_int.max_size(), "\n");
+  if (v_int.max_size() > 0)
+    LOG("Max size for int vector: ", v_int.max_size(), "\n");
   Vector<char> v_char;
-  if (v_char.max_size() > 0) LOG("Max size for char vector: ", v_char.max_size(), "\n");
+  if (v_char.max_size() > 0)
+    LOG("Max size for char vector: ", v_char.max_size(), "\n");
   Vector<double> v_double;
-  if (v_double.max_size() > 0) LOG("Max size for double vector: ", v_double.max_size(), "\n");
+  if (v_double.max_size() > 0)
+    LOG("Max size for double vector: ", v_double.max_size(), "\n");
 }
 
 DUCK_TEST(Memory, ReserveNoOp) {
   Vector<T<>> v{1, 2, 3};
   size_t old_cap = v.capacity();
-  v.reserve(old_cap);    // Should do nothing
-  v.reserve(old_cap / 2); // Should do nothing
+  v.reserve(old_cap);      // Should do nothing
+  v.reserve(old_cap / 2);  // Should do nothing
   LOG("Cap stable: ", v.capacity() == old_cap, "\n");
 }
 
@@ -890,8 +894,8 @@ DUCK_TEST(NonMember, Swap) {
 // =============================================================================
 
 // 1. SINGLE-PASS RANGE ASSIGN (The "use-once" bug)
-#include <sstream>
 #include <iterator>
+#include <sstream>
 DUCK_TEST(Assignment, RangeAssignSinglePass) {
   Vector<T<>> v{1, 2, 3, 4, 5};
   std::istringstream iss("10 20");
@@ -968,13 +972,13 @@ DUCK_TEST(Capacity, MaxSizeAndReserve) {
 // 5. ERASE RETURN VALUES
 DUCK_TEST(Modifiers, EraseReturnValues) {
   Vector<T<>> v{1, 2, 3, 4};
-  
+
   // Erase single: returns iterator following the removed element
-  auto it1 = v.erase(v.begin() + 1); // removes '2'
+  auto it1 = v.erase(v.begin() + 1);  // removes '2'
   LOG("After single erase, it points to: ", *it1, " (expected 3)\n");
 
   // Erase range: returns iterator following the last removed element
-  auto it2 = v.erase(v.begin(), v.begin() + 2); // removes '1', '3'
+  auto it2 = v.erase(v.begin(), v.begin() + 2);  // removes '1', '3'
   if (it2 == v.begin() && *it2 == 4) LOG("Range erase return valid\n");
 
   // Erase last element
@@ -986,7 +990,7 @@ DUCK_TEST(Modifiers, EraseReturnValues) {
 DUCK_TEST(Assignment, OperatorReturnValues) {
   Vector<T<>> v1, v2, v3;
   v1 = {1, 2, 3};
-  
+
   // Check chained assignment: v3 = v2 = v1
   v3 = v2 = v1;
   if (v3.size() == 3 && v2.size() == 3) LOG("Chained copy assignment works\n");
@@ -1000,10 +1004,127 @@ DUCK_TEST(Assignment, OperatorReturnValues) {
 DUCK_TEST(Modifiers, SwapSelfAndEmpty) {
   Vector<T<>> v1{1, 2, 3};
   Vector<T<>> v2;
-  
-  v1.swap(v1); // Self swap
+
+  v1.swap(v1);  // Self swap
   LOG("Size after self-swap: ", v1.size(), "\n");
 
-  v1.swap(v2); // Swap with empty
-  LOG("After swap with empty, v1 size: ", v1.size(), " v2 size: ", v2.size(), "\n");
+  v1.swap(v2);  // Swap with empty
+  LOG("After swap with empty, v1 size: ", v1.size(), " v2 size: ", v2.size(),
+      "\n");
+}
+
+// =============================================================================
+// AI TESTS: PART 6 - STRESS, EXCEPTION SAFETY & ITERATOR STABILITY
+// =============================================================================
+
+// 1. INSERT WITH ALIASING (Inserting from itself during reallocation)
+DUCK_TEST(Aliasing, InsertRangeFromSelf) {
+  Vector<T<>> v{1, 2, 3};
+  v.reserve(3);  // Ensure we are at capacity
+
+  LOG("Before self-range insert: ", v, "\n");
+  // If this triggers a reallocation, the range [begin, end] becomes invalid
+  // while the function is still trying to read from it.
+  v.insert(v.begin() + 1, v.begin(), v.end());
+  LOG("After self-range insert: ", v, "\n");
+}
+
+// 2. SHRINK_TO_FIT (The "No-Op" and "Actual-Action" cases)
+DUCK_TEST(Memory, ShrinkToFitExhaustive) {
+  Vector<T<>> v;
+  v.reserve(100);
+  v.push_back(T<>(1));
+
+  LOG("Cap before shrink: ", v.capacity(), "\n");
+  v.shrink_to_fit();
+  LOG("Cap after shrink: ", v.capacity(), " (Expected: 1)\n");
+
+  // Shrinking an already tight vector
+  v.shrink_to_fit();
+  LOG("Cap after redundant shrink: ", v.capacity(), "\n");
+}
+
+// 3. AT() CONST VS NON-CONST
+DUCK_TEST(Access, AtConstexprManual) {
+  Vector<T<>> v{1, 2, 3};
+  const Vector<T<>>& cv = v;
+
+  v.at(0).val = 10;  // Non-const
+  if (cv.at(0).val == 10) LOG("at() const/non-const mapping valid\n");
+
+  try {
+    (void)cv.at(5);
+  } catch (const std::out_of_range&) {
+    LOG("Const at() throws correctly\n");
+  }
+}
+
+// 4. RESIZE DOWN AND UP (Lifecycle Check)
+DUCK_TEST(Lifecycle, ResizeBoundary) {
+  Vector<T<>> v(10, T<>(1));
+  LOG("Resizing 10 -> 2 (should destroy 8)\n");
+  v.resize(2);
+  LOG("Resizing 2 -> 5 (should construct 3)\n");
+  v.resize(5, T<>(99));
+
+  if (v.size() == 5 && v[4].val == 99) LOG("Resize state valid\n");
+}
+
+// 5. ASSIGNMENT: INITIALIZER LIST (Self-Assignment)
+DUCK_TEST(Assignment, InitializerListOverlaps) {
+  Vector<T<>> v{1, 2, 3};
+  // Assigning from an IL that contains values... this is rarely a bug
+  // but good for coverage of operator=(initializer_list).
+  v = {4, 5, 6, 7};
+  LOG("After IL override: ", v, " Size: ", v.size(), "\n");
+}
+
+// 6. ITERATOR SUBTRACTION AND COMPARISON
+DUCK_TEST(Iterators, Arithmetic) {
+  Vector<T<>> v{1, 2, 3, 4, 5};
+  auto it1 = v.begin() + 1;
+  auto it2 = v.begin() + 4;
+
+  LOG("Distance: ", it2 - it1, " (Expected: 3)\n");
+  if (it1 < it2) LOG("it1 < it2 valid\n");
+  if (it2 > it1) LOG("it2 > it1 valid\n");
+}
+
+// 7. EMPLACE_BACK REALLOCATION STRESS
+DUCK_TEST(Stress, EmplaceBackGrowth) {
+  Vector<T<>> v;
+  // This tests if emplace_back correctly handles the case where the
+  // arguments passed are references to elements inside the vector
+  // AND a reallocation happens.
+  v.push_back(T<>(100));
+  for (int i = 0; i < 10; ++i) {
+    // If v[0] reallocates, the reference to v[0].val must remain valid
+    // for the duration of the constructor call.
+    v.emplace_back(v[0].val);
+  }
+  LOG("Vector after emplace growth: ", v.size(), " elements\n");
+}
+
+// 8. DATA() POINTER STABILITY ON MOVE
+DUCK_TEST(Lifecycle, MovePointerStability) {
+  Vector<T<>> v1{1, 2, 3};
+  T<>* original_ptr = v1.data();
+
+  Vector<T<>> v2 = std::move(v1);
+  if (v2.data() == original_ptr) {
+    LOG("Move construction successfully pilfered pointer\n");
+  }
+  if (v1.data() == nullptr || v1.size() == 0) {
+    LOG("Source vector is now empty/null\n");
+  }
+}
+
+// 9. ASSIGN SINGLE-PASS (EMPTY STREAM)
+DUCK_TEST(Assignment, RangeAssignEmptySinglePass) {
+  Vector<T<>> v{1, 2, 3};
+  std::istringstream empty_iss("");
+  std::istream_iterator<int> start(empty_iss), end;
+
+  v.assign(start, end);
+  LOG("After empty stream assign: size=", v.size(), "\n");
 }
