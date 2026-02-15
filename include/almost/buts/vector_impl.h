@@ -4,6 +4,7 @@
 #include <functional>  // std::reference_wrapper
 #include <iterator>  // std::prev, std::next, std::distance, std::make_move_iterator, std::reverse_iterator, std::make_reverse_iterator, std::forward_iterator
 #include <ranges>    // std::views::repeat, std::views::single
+#include <span>      // std::span
 #include <string>    // std::to_string
 #include <type_traits>  // std::type_identity_t
 #include <utility>      // std::move, std::move_if_noexcept, std::forward
@@ -470,6 +471,12 @@ constexpr void vector<T, Allocator>::clear() noexcept {
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     const_iterator pos, const T& value) {
+  if (capacity() - size() >= 1 && pos != end()) {
+    // IMPLMENTATION: a copy is created here...
+    // See insert(pos, count, value)
+    auto cpy = value;
+    return insert(pos, std::move(cpy));
+  }
   auto view = std::views::single(std::reference_wrapper<const T>(value));
   return insert<InsertOrder::NewFirst, DoDestroy::True>(pos, view.begin(),
                                                         view.end());
@@ -477,9 +484,10 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     const_iterator pos, T&& value) {
+  std::span s(std::addressof(value), 1);
   return insert<InsertOrder::NewFirst, DoDestroy::True>(
-      pos, std::make_move_iterator(std::addressof(value)),
-      std::make_move_iterator(std::addressof(value) + 1));
+      pos, std::make_move_iterator(s.begin()),
+      std::make_move_iterator(s.end()));
 }
 template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
