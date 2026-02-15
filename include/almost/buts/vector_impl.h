@@ -472,8 +472,7 @@ template <class T, class Allocator>
 constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     const_iterator pos, const T& value) {
   if (capacity() - size() >= 1 && pos != end()) {
-    // IMPLMENTATION: a copy is created here...
-    // See insert(pos, count, value)
+    // copy created in case value refers to element in vector
     auto cpy = value;
     return insert(pos, std::move(cpy));
   }
@@ -494,7 +493,8 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::insert(
     const_iterator pos, typename vector<T, Allocator>::size_type count,
     const T& value) {
   if (capacity() - size() >= count) {
-    // IMPLEMENTATION: if there is enough room, a copy is created ???
+    // copy created in case value refers to element in vector
+    // IMPLEMENTATION: they do not check fo pos == end() here...
     auto cpy = value;
     auto view = std::views::repeat(std::reference_wrapper<const T>(cpy), count);
     return insert<InsertOrder::NewFirst, DoDestroy::True>(pos, view.begin(),
@@ -542,7 +542,7 @@ constexpr typename vector<T, Allocator>::iterator vector<T, Allocator>::emplace(
           _impl, dst, std::forward<Args>(args)...);
     } else {
       T tmp(std::forward<Args>(
-          args)...);  // IMPLEMENTATION: tmp is created before shift
+          args)...);  // created in case args refers to element in vector
       shift_to_end(pos, 1);
       *dst = std::move(tmp);  // IMPLEMENTATION: move, not move_if_noexcept
     }
